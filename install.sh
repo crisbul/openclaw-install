@@ -41,7 +41,15 @@ retry() {
 
 log "Install base packages"
 retry 3 apt-get update -y
-retry 3 apt-get install -y curl ca-certificates gnupg tmux git jq nano
+retry 3 apt-get install -y \
+  curl \
+  ca-certificates \
+  gnupg \
+  tmux \
+  git \
+  jq \
+  nano \
+  zstd
 
 log "Install Node 24"
 mkdir -p /etc/apt/keyrings
@@ -106,8 +114,11 @@ cat > "$CONFIG_FILE" <<EOF
 }
 EOF
 
-log "Start Ollama"
+log "Stop old sessions"
 tmux kill-session -t ollama 2>/dev/null || true
+tmux kill-session -t openclaw 2>/dev/null || true
+
+log "Start Ollama"
 tmux new-session -d -s ollama \
   "bash -lc 'export OLLAMA_HOST=${OLLAMA_BIND}; ollama serve >> ${LOG_DIR}/ollama.log 2>&1'"
 
@@ -119,7 +130,6 @@ if [[ "$MODEL" == ollama/* ]]; then
 fi
 
 log "Start OpenClaw"
-tmux kill-session -t openclaw 2>/dev/null || true
 tmux new-session -d -s openclaw \
   "bash -lc 'export PATH=\$(npm prefix -g 2>/dev/null)/bin:\$PATH; openclaw gateway >> ${LOG_DIR}/gateway.log 2>&1'"
 
@@ -135,22 +145,29 @@ set -e
 
 echo
 echo "================ DONE ================"
+echo "Node:        $(node -v)"
+echo "npm:         $(npm -v)"
+echo "OpenClaw:    $(openclaw --version || true)"
+echo "Ollama:      $(ollama --version || true)"
 echo "Config:      $CONFIG_FILE"
 echo "Logs:        $LOG_DIR"
 echo "Gateway:     ws://${GATEWAY_BIND}:${GATEWAY_PORT}"
 echo "Ollama:      http://${OLLAMA_BIND}"
 echo
-echo "tmux ls:"
+echo "tmux sessions:"
 tmux ls || true
 echo
 echo "Useful:"
 echo "  tail -f ${LOG_DIR}/gateway.log"
 echo "  tail -f ${LOG_DIR}/ollama.log"
+echo "  tmux attach -t openclaw"
+echo "  tmux attach -t ollama"
 echo "  openclaw gateway status --deep"
 echo "  curl http://${OLLAMA_BIND}/api/tags"
 echo
 echo "Tunnel from laptop:"
 echo "  ssh -L 18789:127.0.0.1:18789 -L 11434:127.0.0.1:11434 root@YOUR_RUNPOD_IP -p YOUR_SSH_PORT"
+echo "  then open http://127.0.0.1:18789/"
 echo "======================================"
 
 if [ "$OLLAMA_OK" -ne 0 ]; then
