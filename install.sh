@@ -131,7 +131,7 @@ fi
 
 log "Start OpenClaw"
 tmux new-session -d -s openclaw \
-  "bash -lc 'export PATH=\$(npm prefix -g 2>/dev/null)/bin:\$PATH; openclaw gateway >> ${LOG_DIR}/gateway.log 2>&1'"
+  "bash -lc 'export PATH=\$(npm prefix -g 2>/dev/null)/bin:\$PATH; which openclaw; openclaw gateway run >> ${LOG_DIR}/gateway.log 2>&1'"
 
 sleep 8
 
