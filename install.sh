@@ -7,71 +7,139 @@ OPENCLAW_HOME=/root/.openclaw
 WORKSPACE="$OPENCLAW_HOME/workspace"
 LOG_DIR="$OPENCLAW_HOME/logs"
 CONFIG_FILE="$OPENCLAW_HOME/openclaw.json"
+TOKEN_FILE="$OPENCLAW_HOME/gateway.token"
 
-echo "========== INSTALL =========="
+GATEWAY_BIND_MODE="loopback"
+GATEWAY_PORT="18789"
+OLLAMA_HOST_VALUE="127.0.0.1:11434"
+MODEL="ollama/qwen2.5:14b"
+MODEL_PULL="qwen2.5:14b"
 
-apt-get update -y
-apt-get install -y curl git tmux jq ca-certificates gnupg
+log() {
+  echo
+  echo "========== $* =========="
+}
 
-# Node 24
+retry() {
+  local tries="$1"
+  shift
+  local n=1
+  until "$@"; do
+    if [ "$n" -ge "$tries" ]; then
+      echo "ERROR: failed after $tries attempts: $*" >&2
+      return 1
+    fi
+    echo "Retry $n/$tries failed: $*" >&2
+    n=$((n + 1))
+    sleep 3
+  done
+}
+
+log "Install base packages"
+retry 3 apt-get update -y
+retry 3 apt-get install -y curl ca-certificates gnupg tmux git jq nano zstd openssl
+
+log "Install Node 24"
 mkdir -p /etc/apt/keyrings
-curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-  | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+if [ ! -f /etc/apt/keyrings/nodesource.gpg ]; then
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+fi
 
-echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" \
-  > /etc/apt/sources.list.d/nodesource.list
+cat > /etc/apt/sources.list.d/nodesource.list <<'EOF'
+deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main
+EOF
 
-apt-get update -y
-apt-get install -y nodejs
+retry 3 apt-get update -y
+retry 3 apt-get install -y nodejs
 
-# OpenClaw
-npm install -g openclaw
+export PATH="$(npm prefix -g 2>/dev/null)/bin:$PATH"
 
-# Ollama
+log "Install OpenClaw"
+retry 3 npm install -g openclaw@latest
+
+log "Install Ollama"
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Directories
-mkdir -p "$WORKSPACE" "$LOG_DIR"
+log "Prepare directories"
+mkdir -p "$OPENCLAW_HOME" "$WORKSPACE" "$LOG_DIR"
 
-# Config (CRITICAL FIX)
+log "Create token"
+if [ ! -f "$TOKEN_FILE" ]; then
+  openssl rand -hex 24 > "$TOKEN_FILE"
+fi
+TOKEN="$(cat "$TOKEN_FILE")"
+
+log "Stop old sessions"
+tmux kill-session -t ollama 2>/dev/null || true
+tmux kill-session -t openclaw 2>/dev/null || true
+
+log "Start Ollama"
+tmux new-session -d -s ollama \
+  "bash -lc 'export OLLAMA_HOST=${OLLAMA_HOST_VALUE}; ollama serve >> ${LOG_DIR}/ollama.log 2>&1'"
+
+log "Wait for Ollama API"
+for i in $(seq 1 30); do
+  if curl -fsS "http://${OLLAMA_HOST_VALUE}/api/tags" >/dev/null 2>&1; then
+    echo "Ollama is ready"
+    break
+  fi
+  sleep 2
+done
+
+if ! curl -fsS "http://${OLLAMA_HOST_VALUE}/api/tags" >/dev/null 2>&1; then
+  echo "ERROR: Ollama API did not become ready"
+  tail -n 100 "${LOG_DIR}/ollama.log" || true
+  exit 1
+fi
+
+log "Pull model"
+ollama pull "$MODEL_PULL"
+
+log "Verify model exists"
+if ! ollama list | grep -Fq "$MODEL_PULL"; then
+  echo "ERROR: model not found after pull: $MODEL_PULL"
+  ollama list || true
+  exit 1
+fi
+
+log "Write config"
 cat > "$CONFIG_FILE" <<EOF
 {
   "gateway": {
-    "bind": "127.0.0.1",
-    "port": 18789
+    "mode": "local",
+    "bind": "${GATEWAY_BIND_MODE}",
+    "port": ${GATEWAY_PORT},
+    "auth": {
+      "token": "${TOKEN}"
+    }
   },
   "agents": {
     "defaults": {
-      "workspace": "/root/.openclaw/workspace",
+      "workspace": "${WORKSPACE}",
       "model": {
-        "primary": "ollama/qwen2.5:7b"
+        "primary": "${MODEL}"
       }
     }
   }
 }
 EOF
 
-echo "========== START SERVICES =========="
-
-# Start Ollama (background)
-tmux new-session -d -s ollama \
-  "bash -lc 'export OLLAMA_HOST=127.0.0.1:11434 && ollama serve'"
-
-sleep 5
-
-# Pull model (safe small first)
-ollama pull qwen2.5:7b
-
-# Start OpenClaw (background)
+log "Start OpenClaw"
 tmux new-session -d -s openclaw \
-  "bash -lc 'openclaw gateway run'"
+  "bash -lc 'export PATH=\$(npm prefix -g 2>/dev/null)/bin:\$PATH; openclaw gateway run >> ${LOG_DIR}/gateway.log 2>&1'"
 
-sleep 5
+sleep 8
 
-echo "========== STATUS =========="
+log "Checks"
+tmux ls || true
 openclaw gateway status --deep || true
+tail -n 50 "${LOG_DIR}/gateway.log" || true
 
-echo "========== READY =========="
-
-# 🔥🔥🔥 THIS LINE FIXES EVERYTHING 🔥🔥🔥
-tail -f /dev/null
+echo
+echo "================ DONE ================"
+echo "Config:      $CONFIG_FILE"
+echo "Logs:        $LOG_DIR"
+echo "Gateway:     ws://127.0.0.1:${GATEWAY_PORT}"
+echo "Ollama:      http://${OLLAMA_HOST_VALUE}"
+echo "======================================"
