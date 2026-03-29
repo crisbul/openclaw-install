@@ -85,6 +85,7 @@ log "Write config"
 cat > "$CONFIG_FILE" <<EOF
 {
   "gateway": {
+    "mode": "local",
     "bind": "${GATEWAY_BIND}",
     "port": ${GATEWAY_PORT},
     "auth": {
@@ -139,6 +140,7 @@ log "Checks"
 set +e
 curl -fsS "http://${OLLAMA_BIND}/api/tags" >/tmp/ollama-tags.json 2>/dev/null
 OLLAMA_OK=$?
+
 openclaw gateway status --deep >/tmp/openclaw-status.txt 2>&1
 GATEWAY_OK=$?
 set -e
