@@ -14,10 +14,6 @@ GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 OLLAMA_BIND="${OLLAMA_HOST:-127.0.0.1:11434}"
 MODEL="${OPENCLAW_MODEL:-ollama/qwen2.5:14b}"
 MODEL_PULL="${MODEL#ollama/}"
-TELEGRAM_ENABLED="${TELEGRAM_ENABLED:-true}"
-TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-REPLACE_ME}"
-TELEGRAM_DM_POLICY="${TELEGRAM_DM_POLICY:-pairing}"
-TELEGRAM_REQUIRE_MENTION="${TELEGRAM_REQUIRE_MENTION:-true}"
 
 log() {
   echo
@@ -99,18 +95,6 @@ cat > "$CONFIG_FILE" <<EOF
         "primary": "${MODEL}"
       }
     }
-  },
-  "channels": {
-    "telegram": {
-      "enabled": ${TELEGRAM_ENABLED},
-      "botToken": "${TELEGRAM_BOT_TOKEN}",
-      "dmPolicy": "${TELEGRAM_DM_POLICY}",
-      "groups": {
-        "*": {
-          "requireMention": ${TELEGRAM_REQUIRE_MENTION}
-        }
-      }
-    }
   }
 }
 EOF
@@ -123,11 +107,31 @@ log "Start Ollama"
 tmux new-session -d -s ollama \
   "bash -lc 'export OLLAMA_HOST=${OLLAMA_BIND}; ollama serve >> ${LOG_DIR}/ollama.log 2>&1'"
 
-sleep 8
+log "Wait for Ollama API"
+for i in $(seq 1 30); do
+  if curl -fsS "http://${OLLAMA_BIND}/api/tags" >/dev/null 2>&1; then
+    echo "Ollama is ready"
+    break
+  fi
+  sleep 2
+done
+
+if ! curl -fsS "http://${OLLAMA_BIND}/api/tags" >/dev/null 2>&1; then
+  echo "ERROR: Ollama API did not become ready"
+  tail -n 100 "${LOG_DIR}/ollama.log" || true
+  exit 1
+fi
 
 if [[ "$MODEL" == ollama/* ]]; then
   log "Pull model"
-  ollama pull "$MODEL_PULL" || true
+  ollama pull "$MODEL_PULL"
+
+  log "Verify model exists"
+  if ! ollama list | grep -Fq "$MODEL_PULL"; then
+    echo "ERROR: model not found after pull: $MODEL_PULL"
+    ollama list || true
+    exit 1
+  fi
 fi
 
 log "Start OpenClaw"
@@ -140,6 +144,9 @@ log "Checks"
 set +e
 curl -fsS "http://${OLLAMA_BIND}/api/tags" >/tmp/ollama-tags.json 2>/dev/null
 OLLAMA_OK=$?
+
+tmux has-session -t openclaw 2>/dev/null
+TMUX_OPENCLAW_OK=$?
 
 openclaw gateway status --deep >/tmp/openclaw-status.txt 2>&1
 GATEWAY_OK=$?
@@ -176,6 +183,12 @@ if [ "$OLLAMA_OK" -ne 0 ]; then
   echo "WARNING: Ollama health check failed"
 fi
 
+if [ "$TMUX_OPENCLAW_OK" -ne 0 ]; then
+  echo "WARNING: openclaw tmux session missing"
+  tail -n 100 "${LOG_DIR}/gateway.log" || true
+fi
+
 if [ "$GATEWAY_OK" -ne 0 ]; then
   echo "WARNING: OpenClaw health check failed"
+  tail -n 100 "${LOG_DIR}/gateway.log" || true
 fi
