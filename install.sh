@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# openclaw-runpod v3
-echo "SCRIPT_VERSION=openclaw-runpod-v3"
+# openclaw-runpod v4
+echo "SCRIPT_VERSION=openclaw-runpod-v4"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -25,9 +25,7 @@ GATEWAY_PORT="18789"
 GATEWAY_BIND="loopback"
 
 OLLAMA_HOST_VALUE="127.0.0.1:11434"
-OLLAMA_BIN="/usr/local/bin/ollama"
-OLLAMA_URL_PRIMARY="https://ollama.com/download/ollama-linux-amd64"
-OLLAMA_URL_FALLBACK="https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64"
+OLLAMA_ARCHIVE_URL="https://ollama.com/download/ollama-linux-amd64.tar.zst"
 
 MODEL_PULL="qwen3-coder:30b"
 MODEL_OPENCLAW="ollama/qwen3-coder:30b"
@@ -117,17 +115,13 @@ export PATH="$(npm prefix -g 2>/dev/null)/bin:$PATH"
 log "Install OpenClaw"
 retry 3 npm install -g "openclaw@${OPENCLAW_NPM_VERSION}"
 
-log "Install Ollama binary"
-mkdir -p /usr/local/bin
-rm -f /tmp/ollama
+log "Install Ollama archive"
+rm -f /tmp/ollama-linux-amd64.tar.zst
+retry 3 curl -fL --connect-timeout 20 --max-time 600 "$OLLAMA_ARCHIVE_URL" -o /tmp/ollama-linux-amd64.tar.zst
 
-if ! curl -fL --connect-timeout 20 --max-time 300 "$OLLAMA_URL_PRIMARY" -o /tmp/ollama; then
-  echo "Primary Ollama URL failed, trying fallback..."
-  retry 3 curl -fL --connect-timeout 20 --max-time 300 "$OLLAMA_URL_FALLBACK" -o /tmp/ollama
-fi
-
-chmod +x /tmp/ollama
-mv /tmp/ollama "$OLLAMA_BIN"
+# Official manual install method extracts into /usr
+rm -rf /usr/lib/ollama
+retry 3 tar --zstd -xf /tmp/ollama-linux-amd64.tar.zst -C /usr
 
 require_cmd ollama
 require_cmd openclaw
