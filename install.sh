@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# openclaw-runpod v3
+echo "SCRIPT_VERSION=openclaw-runpod-v3"
+
 export DEBIAN_FRONTEND=noninteractive
 
 PERSIST_ROOT="/workspace/openclaw-stack"
@@ -23,7 +26,8 @@ GATEWAY_BIND="loopback"
 
 OLLAMA_HOST_VALUE="127.0.0.1:11434"
 OLLAMA_BIN="/usr/local/bin/ollama"
-OLLAMA_DOWNLOAD_URL="https://ollama.com/download/ollama-linux-amd64"
+OLLAMA_URL_PRIMARY="https://ollama.com/download/ollama-linux-amd64"
+OLLAMA_URL_FALLBACK="https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64"
 
 MODEL_PULL="qwen3-coder:30b"
 MODEL_OPENCLAW="ollama/qwen3-coder:30b"
@@ -95,8 +99,7 @@ retry 3 apt-get install -y \
 log "Install Node.js 24"
 mkdir -p /etc/apt/keyrings
 if [ ! -f /etc/apt/keyrings/nodesource.gpg ]; then
-  retry 3 bash -lc \
-    'curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg'
+  retry 3 bash -lc 'curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg'
 fi
 
 cat > /etc/apt/sources.list.d/nodesource.list <<'EOF'
@@ -116,7 +119,13 @@ retry 3 npm install -g "openclaw@${OPENCLAW_NPM_VERSION}"
 
 log "Install Ollama binary"
 mkdir -p /usr/local/bin
-retry 3 curl -fL "$OLLAMA_DOWNLOAD_URL" -o /tmp/ollama
+rm -f /tmp/ollama
+
+if ! curl -fL --connect-timeout 20 --max-time 300 "$OLLAMA_URL_PRIMARY" -o /tmp/ollama; then
+  echo "Primary Ollama URL failed, trying fallback..."
+  retry 3 curl -fL --connect-timeout 20 --max-time 300 "$OLLAMA_URL_FALLBACK" -o /tmp/ollama
+fi
+
 chmod +x /tmp/ollama
 mv /tmp/ollama "$OLLAMA_BIN"
 
